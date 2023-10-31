@@ -8,10 +8,11 @@ from tqdm.auto import tqdm
 import torch
 from cog import BasePredictor, Input, Path
 from diffusers import (
-    ControlNetModel,
-    StableDiffusionPipeline,
-    StableDiffusionImg2ImgPipeline,
-    StableDiffusionControlNetPipeline,
+    # ControlNetModel,
+    # StableDiffusionXLPipeline,
+    # StableDiffusionXLImg2ImgPipeline,
+    # StableDiffusionXLControlNetPipeline,
+    DiffusionPipeline,
     DDIMScheduler,
     DPMSolverMultistepScheduler,
     EulerAncestralDiscreteScheduler,
@@ -29,13 +30,13 @@ import shutil
 import subprocess
 from diffusers.utils import load_image
 from stable_diffusion_controlnet_img2img import StableDiffusionControlNetImg2ImgPipeline
-from compel import Compel
+from compel import Compel, ReturnedEmbeddingsType
 
 SAFETY_MODEL_CACHE = "diffusers-cache"
 SAFETY_MODEL_ID = "CompVis/stable-diffusion-safety-checker"
 
-DEFAULT_HEIGHT = 512
-DEFAULT_WIDTH = 512
+DEFAULT_HEIGHT = 1024
+DEFAULT_WIDTH = 1024
 DEFAULT_SCHEDULER = "DDIM"
 DEFAULT_GUIDANCE_SCALE = 7.5
 DEFAULT_NUM_INFERENCE_STEPS = 50
@@ -72,18 +73,15 @@ SCHEDULERS = {
     "DPM++SDEKarras": DPMPPSDEKarras,
 }
 
+def download_weights(url, dest):
+    start = time.time()
+    print("downloading url: ", url)
+    print("downloading to: ", dest)
+    subprocess.check_call(["pget", "-x", url, dest], close_fds=False)
+    print("downloading took: ", time.time() - start)
 
 class Predictor(BasePredictor):
     def setup(self):
-        self.safety_checker = StableDiffusionSafetyChecker.from_pretrained(
-            SAFETY_MODEL_ID,
-            cache_dir=SAFETY_MODEL_CACHE,
-            torch_dtype=torch.float16,
-            local_files_only=False,
-        ).to("cuda")
-        self.feature_extractor = CLIPFeatureExtractor.from_pretrained(
-            "openai/clip-vit-base-patch32", cache_dir=SAFETY_MODEL_CACHE
-        )
         self.url = None
 
     def download_tar_weights(self, url):
@@ -126,68 +124,68 @@ class Predictor(BasePredictor):
 
         start_time = time.time()
         print("Loading SD pipeline...")
-        self.txt2img_pipe = StableDiffusionPipeline.from_pretrained(
+        self.txt2img_pipe = DiffusionPipeline.from_pretrained(
             "weights",
-            safety_checker=self.safety_checker,
-            feature_extractor=self.feature_extractor,
             torch_dtype=torch.float16,
+            use_safetensors=True,
+            variant="fp16",
         ).to("cuda")
 
-        print("Loading SD img2img pipeline...")
-        self.img2img_pipe = StableDiffusionImg2ImgPipeline(
-            vae=self.txt2img_pipe.vae,
-            text_encoder=self.txt2img_pipe.text_encoder,
-            tokenizer=self.txt2img_pipe.tokenizer,
-            unet=self.txt2img_pipe.unet,
-            scheduler=self.txt2img_pipe.scheduler,
-            safety_checker=self.txt2img_pipe.safety_checker,
-            feature_extractor=self.txt2img_pipe.feature_extractor,
-        ).to("cuda")
+        # print("Loading SD img2img pipeline...")
+        # self.img2img_pipe = StableDiffusionImg2ImgPipeline(
+        #     vae=self.txt2img_pipe.vae,
+        #     text_encoder=self.txt2img_pipe.text_encoder,
+        #     tokenizer=self.txt2img_pipe.tokenizer,
+        #     unet=self.txt2img_pipe.unet,
+        #     scheduler=self.txt2img_pipe.scheduler,
+        #     safety_checker=self.txt2img_pipe.safety_checker,
+        #     feature_extractor=self.txt2img_pipe.feature_extractor,
+        # ).to("cuda")
 
-        print("Loading controlnet...")
+        # print("Loading controlnet...")
 
-        controlnetModel = (
-            "lllyasviel/sd-controlnet-openpose"
-            if model == "1.5"
-            else "thibaud/controlnet-sd21-openposev2-diffusers"
-        )
+        # controlnetModel = (
+        #     "lllyasviel/sd-controlnet-openpose"
+        #     if model == "1.5"
+        #     else "thibaud/controlnet-sd21-openposev2-diffusers"
+        # )
 
-        controlnet = ControlNetModel.from_pretrained(
-            controlnetModel,
-            torch_dtype=torch.float16,
-            cache_dir="diffusers-cache",
-            local_files_only=False,
-        )
+        # controlnet = ControlNetModel.from_pretrained(
+        #     controlnetModel,
+        #     torch_dtype=torch.float16,
+        #     cache_dir="diffusers-cache",
+        #     local_files_only=False,
+        # )
 
-        print("Loading controlnet txt2img...")
-        self.cnet_txt2img_pose_pipe = StableDiffusionControlNetPipeline(
-            vae=self.txt2img_pipe.vae,
-            text_encoder=self.txt2img_pipe.text_encoder,
-            tokenizer=self.txt2img_pipe.tokenizer,
-            unet=self.txt2img_pipe.unet,
-            scheduler=self.txt2img_pipe.scheduler,
-            safety_checker=self.txt2img_pipe.safety_checker,
-            feature_extractor=self.txt2img_pipe.feature_extractor,
-            controlnet=controlnet,
-        ).to("cuda")
+        # print("Loading controlnet txt2img...")
+        # self.cnet_txt2img_pose_pipe = StableDiffusionControlNetPipeline(
+        #     vae=self.txt2img_pipe.vae,
+        #     text_encoder=self.txt2img_pipe.text_encoder,
+        #     tokenizer=self.txt2img_pipe.tokenizer,
+        #     unet=self.txt2img_pipe.unet,
+        #     scheduler=self.txt2img_pipe.scheduler,
+        #     safety_checker=self.txt2img_pipe.safety_checker,
+        #     feature_extractor=self.txt2img_pipe.feature_extractor,
+        #     controlnet=controlnet,
+        # ).to("cuda")
 
-        print("Loading controlnet img2img...")
-        self.cnet_img2img_pose_pipe = StableDiffusionControlNetImg2ImgPipeline(
-            vae=self.txt2img_pipe.vae,
-            text_encoder=self.txt2img_pipe.text_encoder,
-            tokenizer=self.txt2img_pipe.tokenizer,
-            unet=self.txt2img_pipe.unet,
-            scheduler=self.txt2img_pipe.scheduler,
-            safety_checker=self.txt2img_pipe.safety_checker,
-            feature_extractor=self.txt2img_pipe.feature_extractor,
-            controlnet=controlnet,
-        ).to("cuda")
+        # print("Loading controlnet img2img...")
+        # self.cnet_img2img_pose_pipe = StableDiffusionControlNetImg2ImgPipeline(
+        #     vae=self.txt2img_pipe.vae,
+        #     text_encoder=self.txt2img_pipe.text_encoder,
+        #     tokenizer=self.txt2img_pipe.tokenizer,
+        #     unet=self.txt2img_pipe.unet,
+        #     scheduler=self.txt2img_pipe.scheduler,
+        #     safety_checker=self.txt2img_pipe.safety_checker,
+        #     feature_extractor=self.txt2img_pipe.feature_extractor,
+        #     controlnet=controlnet,
+        # ).to("cuda")
 
         print("Loaded pipelines in {:.2f} seconds".format(time.time() - start_time))
 
-        self.txt2img_pipe.set_progress_bar_config(disable=True)
-        self.img2img_pipe.set_progress_bar_config(disable=True)
-        self.cnet_txt2img_pose_pipe.set_progress_bar_config(disable=True)
+        # self.txt2img_pipe.set_progress_bar_config(disable=True)
+        # self.img2img_pipe.set_progress_bar_config(disable=True)
+        # self.cnet_txt2img_pose_pipe.set_progress_bar_config(disable=True)
         self.url = url
 
     def generate_images(self, images, output_dir):
@@ -208,40 +206,53 @@ class Predictor(BasePredictor):
                         inputs.get("guidance_scale", DEFAULT_GUIDANCE_SCALE)
                     ),
                 }
-                print("GETTING IMAGES")
-                image = inputs.get("image")
-                pose_image = inputs.get("pose_image")
-                if image is not None and pose_image is not None:
-                    print("USING controlnet_img2img_pose_pipe")
-                    kwargs["controlnet_conditioning_image"] = load_image(pose_image)
-                    kwargs["image"] = load_image(image)
-                    kwargs["strength"] = float(inputs.get("strength", DEFAULT_STRENGTH))
-                    kwargs["width"] = int(inputs.get("width", DEFAULT_WIDTH))
-                    kwargs["height"] = int(inputs.get("height", DEFAULT_HEIGHT))
-                    pipeline = self.cnet_img2img_pose_pipe
-                elif pose_image is not None:
-                    print("USING controlnet_text2img_pose_pipe ")
-                    kwargs["image"] = load_image(pose_image)
-                    kwargs["width"] = int(inputs.get("width", DEFAULT_WIDTH))
-                    kwargs["height"] = int(inputs.get("height", DEFAULT_HEIGHT))
-                    pipeline = self.cnet_txt2img_pose_pipe
-                    print("DONE GETTING POSE")
-                elif image is not None:
-                    kwargs["image"] = load_image(image)
-                    kwargs["strength"] = float(inputs.get("strength", DEFAULT_STRENGTH))
-                    pipeline = self.img2img_pipe
-                else:
-                    pipeline = self.txt2img_pipe
-                    kwargs["width"] = int(inputs.get("width", DEFAULT_WIDTH))
-                    kwargs["height"] = int(inputs.get("height", DEFAULT_HEIGHT))
+                # print("GETTING IMAGES")
+                # image = inputs.get("image")
+                # pose_image = inputs.get("pose_image")
+                # if image is not None and pose_image is not None:
+                #     print("USING controlnet_img2img_pose_pipe")
+                #     kwargs["controlnet_conditioning_image"] = load_image(pose_image)
+                #     kwargs["image"] = load_image(image)
+                #     kwargs["strength"] = float(inputs.get("strength", DEFAULT_STRENGTH))
+                #     kwargs["width"] = int(inputs.get("width", DEFAULT_WIDTH))
+                #     kwargs["height"] = int(inputs.get("height", DEFAULT_HEIGHT))
+                #     pipeline = self.cnet_img2img_pose_pipe
+                # elif pose_image is not None:
+                #     print("USING controlnet_text2img_pose_pipe ")
+                #     kwargs["image"] = load_image(pose_image)
+                #     kwargs["width"] = int(inputs.get("width", DEFAULT_WIDTH))
+                #     kwargs["height"] = int(inputs.get("height", DEFAULT_HEIGHT))
+                #     pipeline = self.cnet_txt2img_pose_pipe
+                #     print("DONE GETTING POSE")
+                # elif image is not None:
+                #     kwargs["image"] = load_image(image)
+                #     kwargs["strength"] = float(inputs.get("strength", DEFAULT_STRENGTH))
+                #     pipeline = self.img2img_pipe
+                # else:
+                #     pipeline = self.txt2img_pipe
+                #     kwargs["width"] = int(inputs.get("width", DEFAULT_WIDTH))
+                #     kwargs["height"] = int(inputs.get("height", DEFAULT_HEIGHT))
+
+                pipeline = self.txt2img_pipe
+                kwargs["width"] = int(inputs.get("width", DEFAULT_WIDTH))
+                kwargs["height"] = int(inputs.get("height", DEFAULT_HEIGHT))
 
                 prompt = inputs.get("prompt")
                 negative_prompt = inputs.get("negative_prompt")
-                compel_proc = Compel(
-                    tokenizer=pipeline.tokenizer, text_encoder=pipeline.text_encoder
+                compel = Compel(
+                    tokenizer=[pipeline.tokenizer, pipeline.tokenizer_2] ,
+                    text_encoder=[pipeline.text_encoder, pipeline.text_encoder_2],
+                    returned_embeddings_type=ReturnedEmbeddingsType.PENULTIMATE_HIDDEN_STATES_NON_NORMALIZED,
+                    requires_pooled=[False, True]
                 )
-                kwargs["prompt_embeds"] = compel_proc(prompt)
-                kwargs["negative_prompt_embeds"] = compel_proc(negative_prompt)
+
+                conditioning, pooled = compel(prompt)
+                conditioning_neg, pooled_neg = compel(negative_prompt)
+
+                kwargs["prompt_embeds"] = conditioning
+                kwargs["pooled_prompt_embeds"] = pooled;
+                kwargs["negative_prompt_embeds"] = conditioning_neg
+                kwargs["negative_pooled_prompt_embeds"] = pooled_neg;
                 # Remove prompt and negative prompt from kwargs
                 kwargs.pop("prompt", None)
                 kwargs.pop("negative_prompt", None)
@@ -253,11 +264,6 @@ class Predictor(BasePredictor):
                 pipeline.scheduler = SCHEDULERS[scheduler].from_config(
                     pipeline.scheduler.config
                 )
-
-                if bool(inputs.get("disable_safety_check", False)):
-                    pipeline.safety_checker = None
-                else:
-                    pipeline.safety_checker = self.safety_checker
 
                 seed = int(inputs.get("seed", int.from_bytes(os.urandom(2), "big")))
                 generator = torch.Generator("cuda").manual_seed(seed)
